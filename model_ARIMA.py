@@ -12,14 +12,16 @@ from statsmodels.tsa.stattools import adfuller
 from statsmodels.stats.diagnostic import het_arch, acorr_ljungbox
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.graphics.tsaplots import plot_acf
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# 忽略模型不收敛等警告
+# Ignore convergence and other warnings
 warnings.filterwarnings("ignore")
 
 # =========================
-# 1. 配置与路径
+# 1. Configuration
 # =========================
 TRAIN_PATH = "delhi_climate_train.csv"
+TEST_PATH = "delhi_climate_test.csv"
 DATE_COL = "date"
 TARGET_COL = "meantemp"
 OUTPUT_DIR = Path("Outputs")
@@ -27,7 +29,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # =========================
-# 2. 数据转换函数
+# 2. Data Transformation Functions
 # =========================
 def load_and_transform(path: str):
     df = pd.read_csv(path, parse_dates=[DATE_COL])
@@ -35,8 +37,7 @@ def load_and_transform(path: str):
     df.set_index(DATE_COL, inplace=True)
     y = pd.to_numeric(df[TARGET_COL], errors="coerce").dropna()
 
-    # 手动执行 Log + Diff
-    # 注意：这里我们只做变换，不修改原始 y
+    # Log Transformation + First Differencing
     y_log = np.log(y + 1e-8)
     y_log_diff = y_log.diff().dropna()
 
@@ -44,26 +45,24 @@ def load_and_transform(path: str):
 
 
 # =========================
-# 3. 执行主流程
+# 3. Main Execution Flow
 # =========================
 def main():
-    # A. 准备处理后的平稳序列
-    # 这里的 processed_data 是 log(y) 的一阶差分
+    # A. Data Preprocessing
     processed_data = load_and_transform(TRAIN_PATH)
-    print(f"数据预处理完成 (Log + Diff)，有效观测数: {len(processed_data)}")
+    print(f"Data Preprocessing Complete (Log + Diff). Valid Observations: {len(processed_data)}")
 
-    # B. 网格搜索 (p: 0-30, q: 0-30)
-    # ⚠️ 警告：范围较大，计算时间会较长
-    p_values = range(0, 10)
-    q_values = range(0, 10)
+    # B. Grid Search (p: 0-5, q: 0-5)
+    p_values = range(0, 6)
+    q_values = range(0, 6)
     results_list = []
 
-    print(f"\n开始网格搜索 ARIMA(p, 0, q)... 预计总任务数: {len(p_values) * len(q_values)}")
+    print(f"\nStarting Grid Search for ARIMA(p, 0, q)...")
 
     for p in p_values:
         for q in q_values:
             try:
-                # 关键修改：对已差分数据做拟合，d=0
+                # Fitting on differenced data, so d=0
                 model = ARIMA(processed_data, order=(p, 0, q))
                 res = model.fit()
                 results_list.append({
@@ -71,51 +70,106 @@ def main():
                     'AIC': res.aic, 'BIC': res.bic,
                     'order': (p, 0, q)
                 })
-            except Exception as e:
-                # 捕获高阶模型可能不收敛的情况
+            except:
                 continue
 
-    # C. 筛选最优模型 (按 BIC)
     results_df = pd.DataFrame(results_list)
     if results_df.empty:
-        print("网格搜索未找到有效模型。")
+        print("Grid Search failed to find a valid model.")
         return
 
+    # ==========================================
+    # C. Print Top 4 Model Candidates
+    # ==========================================
     top_models = results_df.sort_values('BIC').head(4)
     print("\n" + "=" * 50)
-    print("--- 最佳模型候选 (针对 Log-Diff 序列) ---")
+    print("--- Top 4 Model Candidates (Ranked by BIC) ---")
     print(top_models[['order', 'AIC', 'BIC']])
     print("=" * 50)
 
-    # D. 自动化诊断
-    for idx, row in top_models.iterrows():
-        order = row['order']
-        order_str = f"p{order[0]}_d{order[1]}_q{order[2]}"
+    # D. Select the Best Model (Rank #1)
+    best_row = top_models.iloc[0]
+    best_order = best_row['order']
 
-        print(f"\n正在诊断最佳模型: ARIMA{order}")
-        model = ARIMA(processed_data, order=order)
-        res = model.fit()
+    print(f"\n>>> Best Model: ARIMA{best_order}")
 
-        # 统计检验
-        lb_test = acorr_ljungbox(res.resid, lags=[10], return_df=True)
-        p_lb = lb_test['lb_pvalue'].values[0]
+    # E. Diagnostics & Parameter Saving (Best Model Only)
+    best_res = ARIMA(processed_data, order=best_order).fit()
 
-        # 绘图
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # --- 1. Save Model Parameters and Summary ---
+    params_path = OUTPUT_DIR / f"ARIMA_{best_order}_Params.csv"
+    best_res.params.to_csv(params_path)
 
-        # 残差自相关 (ACF)
-        plot_acf(res.resid, lags=40, ax=axes[0])
-        axes[0].set_title(f"Residual ACF: {order}\nLjung-Box p: {p_lb:.4f}")
+    summary_path = OUTPUT_DIR / f"ARIMA_{best_order}_Summary.txt"
+    with open(summary_path, "w") as f:
+        f.write(best_res.summary().as_text())
 
-        # 正态性检查 (Q-Q Plot)
-        stats.probplot(res.resid, dist="norm", plot=axes[1])
-        axes[1].set_title(f"Q-Q Plot: {order}")
+    print(f"Parameters saved to: {params_path}")
+    print(f"Summary saved to: {summary_path}")
 
-        plt.tight_layout()
-        plt.savefig(OUTPUT_DIR / f"Diagnostic_{order_str}.png")
-        plt.show()
+    # --- 2. Statistical Testing (Ljung-Box) ---
+    lb_test = acorr_ljungbox(best_res.resid, lags=[10], return_df=True)
+    p_lb = lb_test['lb_pvalue'].values[0]
+    print(f"Ljung - Box: p={p_lb: .4f}")
 
-    print(f"\n任务完成！请在 {OUTPUT_DIR} 文件夹查看诊断图。")
+    # --- 3. Diagnostic Plots ---
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Residual ACF
+    plot_acf(best_res.resid, lags=40, ax=axes[0])
+    axes[0].set_title(f"Residual ACF: {best_order}\n")
+
+    # Q-Q Plot
+    stats.probplot(best_res.resid, dist="norm", plot=axes[1])
+    axes[1].set_title(f"Q-Q Plot: {best_order}")
+
+    plt.tight_layout()
+    diag_plot_path = OUTPUT_DIR / f"Diagnostic_{best_order}.png"
+    plt.savefig(diag_plot_path)
+    plt.show()
+
+    # ==========================================
+    # F. 5-Day Forecast Module (Based on Best Model)
+    # ==========================================
+    print("\n" + "=" * 50)
+    print("--- 5-Day Forecast vs Actual (Best Model) ---")
+    print("=" * 50)
+
+    # Predict next 5 steps in log-diff space
+    forecast_log_diff = best_res.forecast(steps=5)
+
+    # Inverse Transformation Logic
+    df_train_raw = pd.read_csv(TRAIN_PATH, parse_dates=[DATE_COL])
+    df_train_raw = df_train_raw.sort_values(DATE_COL).drop_duplicates(subset=[DATE_COL])
+    last_val_actual = df_train_raw[TARGET_COL].iloc[-1]
+    last_log_val = np.log(last_val_actual + 1e-8)
+
+    # Reconstruct log values (Cumulative Sum) and Apply Exponential
+    forecast_log = last_log_val + np.cumsum(forecast_log_diff)
+    forecast_celsius = np.exp(forecast_log)
+
+    # Load Test Data for Validation
+    if os.path.exists(TEST_PATH):
+        df_test = pd.read_csv(TEST_PATH, parse_dates=[DATE_COL])
+        df_test = df_test.sort_values(DATE_COL).drop_duplicates(subset=[DATE_COL])
+        y_test_actual = df_test[TARGET_COL].head(5).values
+        test_dates = df_test[DATE_COL].head(5).values
+
+        # Calculate Error Metrics
+        mae = mean_absolute_error(y_test_actual, forecast_celsius)
+        rmse = np.sqrt(mean_squared_error(y_test_actual, forecast_celsius))
+
+        # Prepare and Print Comparison Table
+        comp_df = pd.DataFrame({
+            'Date': test_dates,
+            'Actual (°C)': y_test_actual,
+            'Predicted (°C)': forecast_celsius.values,
+            'Difference': forecast_celsius.values - y_test_actual
+        })
+        print(comp_df.to_string(index=False))
+        print(f"\nEvaluation Metrics: MAE = {mae:.2f}°C, RMSE = {rmse:.2f}°C")
+    else:
+        print(f"Test file not found: {TEST_PATH}")
 
 
 if __name__ == "__main__":
