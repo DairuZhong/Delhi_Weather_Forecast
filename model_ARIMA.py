@@ -53,11 +53,11 @@ def main():
     print(f"Data Preprocessing Complete (Log + Diff). Valid Observations: {len(processed_data)}")
 
     # B. Grid Search (p: 0-5, q: 0-5)
-    p_values = range(0, 6)
-    q_values = range(0, 6)
+    p_values = range(0, 10)
+    q_values = range(0, 10)
     results_list = []
 
-    print(f"\nStarting Grid Search for ARIMA(p, 0, q)...")
+    print(f"\nStarting Grid Search for ARIMA(p, 1, q)...")
 
     for p in p_values:
         for q in q_values:
@@ -96,15 +96,10 @@ def main():
     # E. Diagnostics & Parameter Saving (Best Model Only)
     best_res = ARIMA(processed_data, order=best_order).fit()
 
-    # --- 1. Save Model Parameters and Summary ---
-    params_path = OUTPUT_DIR / f"ARIMA_{best_order}_Params.csv"
-    best_res.params.to_csv(params_path)
-
     summary_path = OUTPUT_DIR / f"ARIMA_{best_order}_Summary.txt"
     with open(summary_path, "w") as f:
         f.write(best_res.summary().as_text())
 
-    print(f"Parameters saved to: {params_path}")
     print(f"Summary saved to: {summary_path}")
 
     # --- 2. Statistical Testing (Ljung-Box) ---
@@ -117,11 +112,11 @@ def main():
 
     # Residual ACF
     plot_acf(best_res.resid, lags=40, ax=axes[0])
-    axes[0].set_title(f"Residual ACF: {best_order}\n")
+    axes[0].set_title(f"Residual ACF")
 
     # Q-Q Plot
     stats.probplot(best_res.resid, dist="norm", plot=axes[1])
-    axes[1].set_title(f"Q-Q Plot: {best_order}")
+    axes[1].set_title(f"Q-Q Plot")
 
     plt.tight_layout()
     diag_plot_path = OUTPUT_DIR / f"Diagnostic_{best_order}.png"

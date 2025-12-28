@@ -2,8 +2,8 @@
 ==============================================================================
 Dep. Variable:               meantemp   No. Observations:                 1569
 Model:                 ARIMA(1, 0, 1)   Log Likelihood                1825.623
-Date:                Sat, 27 Dec 2025   AIC                          -3643.246
-Time:                        23:57:56   BIC                          -3621.814
+Date:                Sun, 28 Dec 2025   AIC                          -3643.246
+Time:                        14:47:14   BIC                          -3621.814
 Sample:                    01-02-2013   HQIC                         -3635.280
                          - 04-19-2017                                         
 Covariance Type:                  opg                                         
